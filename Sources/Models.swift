@@ -1,4 +1,5 @@
 import Foundation
+import IOKit.ps
 
 struct BatterySample: Codable {
     let timestamp: Date
@@ -9,9 +10,36 @@ struct BatterySample: Codable {
     let powerSource: String
     let timeRemainingMinutes: Int?
 
+    private var normalizedPowerSource: String {
+        powerSource.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var preciseLevel: Double {
+        guard maxCapacity > 0 else {
+            return level
+        }
+
+        return (Double(currentCapacity) / Double(maxCapacity)) * 100
+    }
+
     var isOnBattery: Bool {
-        let normalized = powerSource.lowercased()
-        return normalized.contains("battery") || (!isCharging && !normalized.contains("ac"))
+        if powerSource == kIOPSBatteryPowerValue {
+            return true
+        }
+
+        if powerSource == kIOPSACPowerValue {
+            return false
+        }
+
+        return normalizedPowerSource.contains("battery") || (!isCharging && !normalizedPowerSource.contains("ac"))
+    }
+
+    var displayedTimeRemainingMinutes: Int? {
+        guard let timeRemainingMinutes, timeRemainingMinutes >= 0 else {
+            return nil
+        }
+
+        return (isCharging || isOnBattery) ? timeRemainingMinutes : nil
     }
 }
 
@@ -32,12 +60,39 @@ struct TrackerState: Codable {
     var updatedAt: Date
 
     var isFresh: Bool {
+        isFresh(at: Date())
+    }
+
+    func isFresh(at now: Date) -> Bool {
         guard let lastSampleAt else {
             return false
         }
 
         let maxAge = max(sampleInterval * 2.5, 300)
-        return Date().timeIntervalSince(lastSampleAt) <= maxAge
+        return now.timeIntervalSince(lastSampleAt) <= maxAge
+    }
+
+    func activeAwakeSpan(now: Date, trackerIsRunning: Bool) -> AwakeSpan? {
+        guard let activeAwakeStart else {
+            return nil
+        }
+
+        let boundedEnd: Date
+        if trackerIsRunning && isFresh(at: now) {
+            boundedEnd = now
+        } else if let lastSampleAt, lastSampleAt > activeAwakeStart {
+            boundedEnd = min(now, lastSampleAt)
+        } else if updatedAt > activeAwakeStart {
+            boundedEnd = min(now, updatedAt)
+        } else {
+            return nil
+        }
+
+        guard boundedEnd > activeAwakeStart else {
+            return nil
+        }
+
+        return AwakeSpan(start: activeAwakeStart, end: boundedEnd)
     }
 }
 

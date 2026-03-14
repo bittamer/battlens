@@ -7,10 +7,21 @@ let package = Package(
     platforms: [
         .macOS(.v13)
     ],
+    products: [
+        .executable(
+            name: "battlens",
+            targets: ["battlens"]
+        ),
+    ],
     targets: [
         .executableTarget(
             name: "battlens",
             path: "Sources"
+        ),
+        .testTarget(
+            name: "battlensTests",
+            dependencies: ["battlens"],
+            path: "Tests"
         ),
     ]
 )

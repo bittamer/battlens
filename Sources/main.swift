@@ -76,7 +76,15 @@ do {
 
     case "track":
         let interval = try parsed.int("interval", default: 300)
+        guard interval > 0 else {
+            throw BattLensError.message("Option --interval must be greater than 0.")
+        }
+
         let duration = parsed.string("duration").flatMap(TimeInterval.init)
+        if let duration, duration <= 0 {
+            throw BattLensError.message("Option --duration must be greater than 0.")
+        }
+
         let verbose = parsed.hasFlag("verbose")
         let service = TrackerService(store: store, interval: TimeInterval(interval), duration: duration, verbose: verbose)
         try service.run()
@@ -84,6 +92,14 @@ do {
     case "report":
         let days = try parsed.int("days", default: 7)
         let sessionLimit = try parsed.int("sessions", default: 6)
+        guard days > 0 else {
+            throw BattLensError.message("Option --days must be greater than 0.")
+        }
+
+        guard sessionLimit > 0 else {
+            throw BattLensError.message("Option --sessions must be greater than 0.")
+        }
+
         let plain = parsed.hasFlag("plain") || ProcessInfo.processInfo.environment["NO_COLOR"] != nil || isatty(STDOUT_FILENO) == 0
         let renderer = ReportRenderer(
             samples: try store.loadSamples(),
@@ -96,6 +112,10 @@ do {
 
     case "install-agent":
         let interval = try parsed.int("interval", default: 300)
+        guard interval > 0 else {
+            throw BattLensError.message("Option --interval must be greater than 0.")
+        }
+
         let executablePath = parsed.string("executable") ?? URL(fileURLWithPath: CommandLine.arguments[0]).path
         try LaunchAgentManager.install(store: store, executablePath: executablePath, interval: interval)
         print("Installed launch agent at \(try LaunchAgentManager.plistURL().path)")

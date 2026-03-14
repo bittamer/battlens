@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import IOKit
+import IOKit.ps
 import IOKit.pwr_mgt
 
 private let ioMessageCanSystemSleep: natural_t = 0xE0000270
@@ -91,16 +92,70 @@ final class SystemPowerObserver {
     }
 }
 
+final class PowerSourceObserver {
+    private let onChange: () -> Void
+    private var runLoopSource: CFRunLoopSource?
+
+    init(onChange: @escaping () -> Void) {
+        self.onChange = onChange
+    }
+
+    func start() throws {
+        let selfPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+
+        guard let source = IOPSNotificationCreateRunLoopSource(
+            { context in
+                guard let context else {
+                    return
+                }
+
+                let observer = Unmanaged<PowerSourceObserver>.fromOpaque(context).takeUnretainedValue()
+                observer.onChange()
+            },
+            selfPointer
+        )?.takeRetainedValue() else {
+            throw BattLensError.message("Failed to create macOS power-source notification source.")
+        }
+
+        runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .defaultMode)
+    }
+
+    func stop() {
+        guard let runLoopSource else {
+            return
+        }
+
+        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .defaultMode)
+        CFRunLoopSourceInvalidate(runLoopSource)
+        self.runLoopSource = nil
+    }
+}
+
+private struct PowerStateSignature: Equatable {
+    let powerSource: String
+    let isCharging: Bool
+    let isOnBattery: Bool
+
+    init(sample: BatterySample) {
+        self.powerSource = sample.powerSource
+        self.isCharging = sample.isCharging
+        self.isOnBattery = sample.isOnBattery
+    }
+}
+
 final class TrackerService: @unchecked Sendable {
     private let store: BattLensStore
     private let interval: TimeInterval
     private let duration: TimeInterval?
     private let verbose: Bool
     private var powerObserver: SystemPowerObserver?
+    private var powerSourceObserver: PowerSourceObserver?
     private var sampleTimer: Timer?
     private var durationTimer: Timer?
     private var signalSources: [DispatchSourceSignal] = []
     private var awakeStartedAt: Date?
+    private var lastPowerState: PowerStateSignature?
     private var isStopping = false
 
     init(store: BattLensStore, interval: TimeInterval, duration: TimeInterval?, verbose: Bool) {
@@ -121,6 +176,11 @@ final class TrackerService: @unchecked Sendable {
             onWake: { [weak self] in self?.handleWake() }
         )
         try powerObserver?.start()
+
+        powerSourceObserver = PowerSourceObserver(
+            onChange: { [weak self] in self?.handlePowerSourceChange() }
+        )
+        try powerSourceObserver?.start()
 
         installSampleTimer()
         installDurationTimer()
@@ -157,6 +217,34 @@ final class TrackerService: @unchecked Sendable {
             try persistState(at: now)
             if verbose {
                 print("[\(Formatters.timestamp.string(from: now))] system woke")
+            }
+        } catch {
+            fputs("battlens: \(error.localizedDescription)\n", stderr)
+        }
+    }
+
+    private func handlePowerSourceChange() {
+        guard !isStopping else {
+            return
+        }
+
+        let now = Date()
+
+        do {
+            let snapshot = try BatteryReader.readSnapshot(now: now)
+            let powerState = PowerStateSignature(sample: snapshot)
+
+            guard powerState != lastPowerState else {
+                return
+            }
+
+            try store.appendSample(snapshot)
+            lastPowerState = powerState
+            try persistState(at: now)
+
+            if verbose {
+                let chargingState = snapshot.isCharging ? "charging" : "not charging"
+                print("[\(Formatters.timestamp.string(from: now))] power source changed to \(snapshot.powerSource) (\(chargingState))")
             }
         } catch {
             fputs("battlens: \(error.localizedDescription)\n", stderr)
@@ -228,13 +316,18 @@ final class TrackerService: @unchecked Sendable {
         signalSources.removeAll()
         powerObserver?.stop()
         powerObserver = nil
+        powerSourceObserver?.stop()
+        powerSourceObserver = nil
         CFRunLoopStop(CFRunLoopGetMain())
         exit(EXIT_SUCCESS)
     }
 
-    private func sample(at date: Date) throws {
+    @discardableResult
+    private func sample(at date: Date) throws -> BatterySample {
         let snapshot = try BatteryReader.readSnapshot(now: date)
         try store.appendSample(snapshot)
+        lastPowerState = PowerStateSignature(sample: snapshot)
+        return snapshot
     }
 
     private func closeAwakeSpan(at end: Date) throws {

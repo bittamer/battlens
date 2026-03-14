@@ -25,7 +25,16 @@ enum BatteryReader {
             let powerSource = description[kIOPSPowerSourceStateKey as String] as? String ?? "Unknown"
             let timeToEmpty = description[kIOPSTimeToEmptyKey as String] as? Int
             let timeToFull = description[kIOPSTimeToFullChargeKey as String] as? Int
-            let timeRemaining = isCharging ? timeToFull : timeToEmpty
+            let isOnBattery = powerSource == kIOPSBatteryPowerValue || powerSource.lowercased().contains("battery")
+            let timeRemaining: Int?
+
+            if isCharging {
+                timeRemaining = timeToFull
+            } else if isOnBattery {
+                timeRemaining = timeToEmpty
+            } else {
+                timeRemaining = nil
+            }
             let rawLevel = maxCapacity > 0 ? (Double(currentCapacity) / Double(maxCapacity)) * 100 : 0
             let level = (rawLevel * 10).rounded() / 10
 

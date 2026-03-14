@@ -41,7 +41,7 @@ struct ReportRenderer {
         lines.append("")
 
         if let latest = recentSamples.last {
-            let timeLeft = latest.timeRemainingMinutes.map(formatDuration(minutes:)) ?? "n/a"
+            let timeLeft = latest.displayedTimeRemainingMinutes.map(formatDuration(minutes:)) ?? "n/a"
             lines.append("Now: \(style(String(format: "%.1f%%", latest.level), levelColor(for: latest.level), bold: true))  \(latest.powerSource)  remaining \(timeLeft)")
             lines.append("Latest sample: \(Formatters.timestamp.string(from: latest.timestamp))")
         } else {
@@ -66,13 +66,13 @@ struct ReportRenderer {
     }
 
     private func mergedAwakeSpans() -> [AwakeSpan] {
-        var spans = awakeSpans.sorted { $0.start < $1.start }
+        var spans = awakeSpans
 
-        if let state, state.isFresh, let activeAwakeStart = state.activeAwakeStart {
-            spans.append(AwakeSpan(start: activeAwakeStart, end: now))
+        if let state, let activeSpan = state.activeAwakeSpan(now: now, trackerIsRunning: trackerIsRunning(state.trackerPID)) {
+            spans.append(activeSpan)
         }
 
-        return spans
+        return SessionAnalyzer.mergeAwakeSpans(spans)
     }
 
     private func renderBatteryGraph(days: Int) -> [String] {
@@ -262,6 +262,18 @@ struct ReportRenderer {
         return ioctl(STDOUT_FILENO, TIOCGWINSZ, &windowSize) == 0 ? max(40, Int(windowSize.ws_col)) : 80
     }
 
+    private func trackerIsRunning(_ pid: Int32) -> Bool {
+        guard pid > 0 else {
+            return false
+        }
+
+        if kill(pid, 0) == 0 {
+            return true
+        }
+
+        return errno == EPERM
+    }
+
     private func bucketedBatteryLevels(samples: [BatterySample], start: Date, end: Date, buckets: Int) -> [Double] {
         guard end > start, buckets > 0, !samples.isEmpty else {
             return []
@@ -347,11 +359,13 @@ enum ANSIColor {
 
 enum SessionAnalyzer {
     static func sessions(from samples: [BatterySample], awakeSpans: [AwakeSpan]) -> [ChargeSession] {
+        let orderedSamples = samples.sorted { $0.timestamp < $1.timestamp }
+        let mergedAwakeSpans = mergeAwakeSpans(awakeSpans)
         var sessions: [ChargeSession] = []
         var currentStartSample: BatterySample?
         var lastBatterySample: BatterySample?
 
-        for sample in samples {
+        for sample in orderedSamples {
             if sample.isOnBattery {
                 if currentStartSample == nil {
                     currentStartSample = sample
@@ -360,8 +374,8 @@ enum SessionAnalyzer {
                 continue
             }
 
-            if let startSample = currentStartSample, lastBatterySample != nil {
-                sessions.append(makeSession(start: startSample, end: sample, awakeSpans: awakeSpans, ongoing: false))
+            if let startSample = currentStartSample, let lastBatterySample {
+                sessions.append(makeSession(start: startSample, end: lastBatterySample, awakeSpans: mergedAwakeSpans, ongoing: false))
             }
 
             currentStartSample = nil
@@ -369,10 +383,40 @@ enum SessionAnalyzer {
         }
 
         if let startSample = currentStartSample, let lastBatterySample {
-            sessions.append(makeSession(start: startSample, end: lastBatterySample, awakeSpans: awakeSpans, ongoing: true))
+            sessions.append(makeSession(start: startSample, end: lastBatterySample, awakeSpans: mergedAwakeSpans, ongoing: true))
         }
 
         return sessions
+    }
+
+    static func mergeAwakeSpans(_ spans: [AwakeSpan]) -> [AwakeSpan] {
+        let orderedSpans = spans
+            .filter { $0.end > $0.start }
+            .sorted { lhs, rhs in
+                if lhs.start == rhs.start {
+                    return lhs.end < rhs.end
+                }
+
+                return lhs.start < rhs.start
+            }
+
+        guard var current = orderedSpans.first else {
+            return []
+        }
+
+        var merged: [AwakeSpan] = []
+
+        for span in orderedSpans.dropFirst() {
+            if span.start <= current.end {
+                current = AwakeSpan(start: current.start, end: max(current.end, span.end))
+            } else {
+                merged.append(current)
+                current = span
+            }
+        }
+
+        merged.append(current)
+        return merged
     }
 
     static func overlapDuration(of spans: [AwakeSpan], within range: Range<Date>) -> TimeInterval {
@@ -386,8 +430,8 @@ enum SessionAnalyzer {
         return ChargeSession(
             start: start.timestamp,
             end: end.timestamp,
-            startLevel: start.level,
-            endLevel: end.level,
+            startLevel: start.preciseLevel,
+            endLevel: end.preciseLevel,
             awakeDuration: awake,
             isOngoing: ongoing
         )
