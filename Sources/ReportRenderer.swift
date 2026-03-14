@@ -225,6 +225,11 @@ struct ReportRenderer {
         }
 
         var lines: [String] = []
+
+        if let summary = dischargeSummaryLine(for: sessions) {
+            lines.append(summary)
+        }
+
         lines.append("Start         Awake    Elapsed  Drop    Full-charge estimate")
 
         for session in sessions.suffix(limit).reversed() {
@@ -247,6 +252,23 @@ struct ReportRenderer {
         }
 
         return lines
+    }
+
+    private func dischargeSummaryLine(for sessions: [ChargeSession]) -> String? {
+        let measurableSessions = sessions.filter { $0.consumedPercent >= 1 && $0.awakeDuration > 0 }
+        guard !measurableSessions.isEmpty else {
+            return nil
+        }
+
+        let totalConsumed = measurableSessions.reduce(0) { $0 + $1.consumedPercent }
+        let totalAwake = measurableSessions.reduce(0) { $0 + $1.awakeDuration }
+        guard totalConsumed > 0, totalAwake > 0 else {
+            return nil
+        }
+
+        let averageDrainRate = totalConsumed / totalAwake * 3600
+        let fullChargeEstimate = totalAwake / totalConsumed * 100
+        return style("Avg drain \(formatRate(averageDrainRate)) awake   Full-charge estimate \(formatDuration(fullChargeEstimate))   Sessions \(measurableSessions.count)", .muted)
     }
 
     private func renderChargingSessions(sessions: [ChargingSession], limit: Int) -> [String] {

@@ -264,3 +264,85 @@ func reportShowsChargingStatusAndChargingSection() {
     #expect(report.contains("to full 45m"))
     #expect(report.contains("Current charge:"))
 }
+
+@Test
+func reportShowsAggregateDischargeEstimateAcrossSessions() {
+    let firstStart = Date(timeIntervalSince1970: 0)
+    let firstEnd = Date(timeIntervalSince1970: 3_600)
+    let firstCharge = Date(timeIntervalSince1970: 4_200)
+    let secondStart = Date(timeIntervalSince1970: 7_200)
+    let secondEnd = Date(timeIntervalSince1970: 10_800)
+    let secondCharge = Date(timeIntervalSince1970: 11_400)
+
+    let renderer = ReportRenderer(
+        samples: [
+            BatterySample(
+                timestamp: firstStart,
+                level: 100.0,
+                currentCapacity: 6_000,
+                maxCapacity: 6_000,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 300
+            ),
+            BatterySample(
+                timestamp: firstEnd,
+                level: 90.0,
+                currentCapacity: 5_400,
+                maxCapacity: 6_000,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 240
+            ),
+            BatterySample(
+                timestamp: firstCharge,
+                level: 92.0,
+                currentCapacity: 5_520,
+                maxCapacity: 6_000,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 90
+            ),
+            BatterySample(
+                timestamp: secondStart,
+                level: 80.0,
+                currentCapacity: 4_800,
+                maxCapacity: 6_000,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 220
+            ),
+            BatterySample(
+                timestamp: secondEnd,
+                level: 60.0,
+                currentCapacity: 3_600,
+                maxCapacity: 6_000,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 120
+            ),
+            BatterySample(
+                timestamp: secondCharge,
+                level: 61.0,
+                currentCapacity: 3_660,
+                maxCapacity: 6_000,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 75
+            )
+        ],
+        awakeSpans: [
+            AwakeSpan(start: firstStart, end: firstEnd),
+            AwakeSpan(start: secondStart, end: secondEnd)
+        ],
+        state: nil,
+        useColor: false,
+        now: secondCharge
+    )
+
+    let report = renderer.render(days: 1, sessionLimit: 5)
+
+    #expect(report.contains("Avg drain 15.0%/hr awake"))
+    #expect(report.contains("Full-charge estimate 6h 40m"))
+    #expect(report.contains("Sessions 2"))
+}
