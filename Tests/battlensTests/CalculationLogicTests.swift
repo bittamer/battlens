@@ -133,3 +133,134 @@ func displayedTimeRemainingIsHiddenForIdleACSamples() {
 
     #expect(sample.displayedTimeRemainingMinutes == nil)
 }
+
+@Test
+func chargingSessionUsesPluggedInIdleSampleAsCompletionBoundary() throws {
+    let start = Date(timeIntervalSince1970: 0)
+    let lastCharging = Date(timeIntervalSince1970: 1_800)
+    let chargeComplete = Date(timeIntervalSince1970: 2_400)
+
+    let samples = [
+        BatterySample(
+            timestamp: start,
+            level: 20.0,
+            currentCapacity: 1_200,
+            maxCapacity: 6_000,
+            isCharging: true,
+            powerSource: "AC Power",
+            timeRemainingMinutes: 180
+        ),
+        BatterySample(
+            timestamp: lastCharging,
+            level: 50.0,
+            currentCapacity: 3_000,
+            maxCapacity: 6_000,
+            isCharging: true,
+            powerSource: "AC Power",
+            timeRemainingMinutes: 90
+        ),
+        BatterySample(
+            timestamp: chargeComplete,
+            level: 80.0,
+            currentCapacity: 4_800,
+            maxCapacity: 6_000,
+            isCharging: false,
+            powerSource: "AC Power",
+            timeRemainingMinutes: nil
+        )
+    ]
+
+    let sessions = SessionAnalyzer.chargingSessions(
+        from: samples,
+        awakeSpans: [AwakeSpan(start: start, end: chargeComplete)]
+    )
+
+    let session = try #require(sessions.first)
+    #expect(session.end == chargeComplete)
+    #expect(abs(session.gainedPercent - 60) < 0.001)
+    #expect(abs((session.estimatedTimeToFull ?? 0) - 800) < 0.001)
+}
+
+@Test
+func chargingSessionFallsBackToLastChargingSampleWhenUnplugged() throws {
+    let start = Date(timeIntervalSince1970: 0)
+    let lastCharging = Date(timeIntervalSince1970: 900)
+    let unplugged = Date(timeIntervalSince1970: 1_200)
+
+    let samples = [
+        BatterySample(
+            timestamp: start,
+            level: 30.0,
+            currentCapacity: 1_800,
+            maxCapacity: 6_000,
+            isCharging: true,
+            powerSource: "AC Power",
+            timeRemainingMinutes: 120
+        ),
+        BatterySample(
+            timestamp: lastCharging,
+            level: 45.0,
+            currentCapacity: 2_700,
+            maxCapacity: 6_000,
+            isCharging: true,
+            powerSource: "AC Power",
+            timeRemainingMinutes: 95
+        ),
+        BatterySample(
+            timestamp: unplugged,
+            level: 44.0,
+            currentCapacity: 2_640,
+            maxCapacity: 6_000,
+            isCharging: false,
+            powerSource: "Battery Power",
+            timeRemainingMinutes: 150
+        )
+    ]
+
+    let sessions = SessionAnalyzer.chargingSessions(
+        from: samples,
+        awakeSpans: [AwakeSpan(start: start, end: unplugged)]
+    )
+
+    let session = try #require(sessions.first)
+    #expect(session.end == lastCharging)
+    #expect(abs(session.gainedPercent - 15) < 0.001)
+}
+
+@Test
+func reportShowsChargingStatusAndChargingSection() {
+    let start = Date(timeIntervalSince1970: 0)
+    let now = Date(timeIntervalSince1970: 1_200)
+    let renderer = ReportRenderer(
+        samples: [
+            BatterySample(
+                timestamp: start,
+                level: 40.0,
+                currentCapacity: 2_400,
+                maxCapacity: 6_000,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 90
+            ),
+            BatterySample(
+                timestamp: now,
+                level: 55.0,
+                currentCapacity: 3_300,
+                maxCapacity: 6_000,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 45
+            )
+        ],
+        awakeSpans: [AwakeSpan(start: start, end: now)],
+        state: nil,
+        useColor: false,
+        now: now
+    )
+
+    let report = renderer.render(days: 1, sessionLimit: 5)
+
+    #expect(report.contains("Charging Sessions"))
+    #expect(report.contains("to full 45m"))
+    #expect(report.contains("Current charge:"))
+}

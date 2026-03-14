@@ -137,14 +137,14 @@ func printHelp(to stream: UnsafeMutablePointer<FILE> = stdout) {
     let text = """
     battlens
 
-    A macOS CLI that logs battery level and laptop awake time over time.
+    A macOS CLI that logs battery level, charge states, and laptop awake time over time.
 
     Commands:
       help                      Show this help text
       where                     Print the data directory
       snapshot                  Record a single battery sample now
       track                     Run the tracker in the foreground
-      report                    Render charts and single-charge estimates
+      report                    Render charts plus charge and discharge estimates
       install-agent             Install a per-user launchd agent
       uninstall-agent           Remove the launchd agent
 

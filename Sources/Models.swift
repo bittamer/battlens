@@ -41,6 +41,31 @@ struct BatterySample: Codable {
 
         return (isCharging || isOnBattery) ? timeRemainingMinutes : nil
     }
+
+    var powerFlowState: PowerFlowState {
+        if isCharging {
+            return .charging
+        }
+
+        return isOnBattery ? .discharging : .pluggedInIdle
+    }
+}
+
+enum PowerFlowState {
+    case discharging
+    case charging
+    case pluggedInIdle
+
+    var statusText: String {
+        switch self {
+        case .discharging:
+            return "on battery"
+        case .charging:
+            return "charging"
+        case .pluggedInIdle:
+            return "plugged in"
+        }
+    }
 }
 
 struct AwakeSpan: Codable {
@@ -118,6 +143,48 @@ struct ChargeSession {
         }
 
         return awakeDuration / consumedPercent * 100
+    }
+}
+
+struct ChargingSession {
+    let start: Date
+    let end: Date
+    let startLevel: Double
+    let endLevel: Double
+    let awakeDuration: TimeInterval
+    let isOngoing: Bool
+
+    var elapsedDuration: TimeInterval {
+        max(0, end.timeIntervalSince(start))
+    }
+
+    var gainedPercent: Double {
+        max(0, endLevel - startLevel)
+    }
+
+    var averageRatePercentPerHour: Double? {
+        guard gainedPercent > 0, elapsedDuration > 0 else {
+            return nil
+        }
+
+        return gainedPercent / elapsedDuration * 3600
+    }
+
+    var estimatedTimeToFull: TimeInterval? {
+        guard gainedPercent >= 1, elapsedDuration > 0 else {
+            return nil
+        }
+
+        let remainingPercent = max(0, 100 - min(endLevel, 100))
+        return elapsedDuration / gainedPercent * remainingPercent
+    }
+
+    var estimatedZeroToFullDuration: TimeInterval? {
+        guard gainedPercent >= 1, elapsedDuration > 0 else {
+            return nil
+        }
+
+        return elapsedDuration / gainedPercent * 100
     }
 }
 

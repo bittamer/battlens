@@ -31,18 +31,19 @@ struct ReportRenderer {
     func render(days: Int, sessionLimit: Int) -> String {
         let recentSamples = samples.sorted { $0.timestamp < $1.timestamp }
         let spans = mergedAwakeSpans()
-        let sessions = SessionAnalyzer.sessions(from: recentSamples, awakeSpans: spans)
+        let dischargeSessions = SessionAnalyzer.sessions(from: recentSamples, awakeSpans: spans)
             .filter { $0.consumedPercent >= 3 || $0.awakeDuration >= 900 }
+        let chargingSessions = SessionAnalyzer.chargingSessions(from: recentSamples, awakeSpans: spans)
+            .filter { $0.gainedPercent >= 3 || $0.elapsedDuration >= 900 || $0.isOngoing }
 
         var lines: [String] = []
 
         lines.append(style("BattLens", .accent, bold: true))
-        lines.append(style("Battery history and awake-time tracking for macOS", .muted))
+        lines.append(style("Battery history, awake time, and charge-state tracking for macOS", .muted))
         lines.append("")
 
         if let latest = recentSamples.last {
-            let timeLeft = latest.displayedTimeRemainingMinutes.map(formatDuration(minutes:)) ?? "n/a"
-            lines.append("Now: \(style(String(format: "%.1f%%", latest.level), levelColor(for: latest.level), bold: true))  \(latest.powerSource)  remaining \(timeLeft)")
+            lines.append(currentStatusLine(for: latest))
             lines.append("Latest sample: \(Formatters.timestamp.string(from: latest.timestamp))")
         } else {
             lines.append("No samples recorded yet. Run `battlens track` or `battlens snapshot` to start logging.")
@@ -59,8 +60,12 @@ struct ReportRenderer {
         lines.append(contentsOf: renderAwakeBars(days: days))
         lines.append("")
 
-        lines.append(sectionTitle("Single-Charge Sessions"))
-        lines.append(contentsOf: renderSessions(sessions: sessions, limit: sessionLimit))
+        lines.append(sectionTitle("Discharge Sessions"))
+        lines.append(contentsOf: renderDischargeSessions(sessions: dischargeSessions, limit: sessionLimit))
+        lines.append("")
+
+        lines.append(sectionTitle("Charging Sessions"))
+        lines.append(contentsOf: renderChargingSessions(sessions: chargingSessions, limit: sessionLimit))
 
         return lines.joined(separator: "\n")
     }
@@ -196,9 +201,27 @@ struct ReportRenderer {
         }
     }
 
-    private func renderSessions(sessions: [ChargeSession], limit: Int) -> [String] {
+    private func currentStatusLine(for sample: BatterySample) -> String {
+        let level = style(String(format: "%.1f%%", sample.level), levelColor(for: sample.level), bold: true)
+        let timing: String
+
+        switch sample.powerFlowState {
+        case .discharging:
+            let remaining = sample.displayedTimeRemainingMinutes.map(formatDuration(minutes:)) ?? "n/a"
+            timing = "remaining \(remaining)"
+        case .charging:
+            let toFull = sample.displayedTimeRemainingMinutes.map(formatDuration(minutes:)) ?? "n/a"
+            timing = "to full \(toFull)"
+        case .pluggedInIdle:
+            timing = "not charging"
+        }
+
+        return "Now: \(level)  \(sample.powerSource)  \(sample.powerFlowState.statusText)  \(timing)"
+    }
+
+    private func renderDischargeSessions(sessions: [ChargeSession], limit: Int) -> [String] {
         guard !sessions.isEmpty else {
-            return [style("No unplugged sessions yet. Once you use the Mac on battery, BattLens will estimate single-charge runtime here.", .muted)]
+            return [style("No unplugged sessions yet. Once you use the Mac on battery, BattLens will estimate awake runtime here.", .muted)]
         }
 
         var lines: [String] = []
@@ -224,6 +247,66 @@ struct ReportRenderer {
         }
 
         return lines
+    }
+
+    private func renderChargingSessions(sessions: [ChargingSession], limit: Int) -> [String] {
+        guard !sessions.isEmpty else {
+            return [style("No charging sessions yet. Plug in the Mac while BattLens is running to track charge-up pace here.", .muted)]
+        }
+
+        var lines: [String] = []
+
+        if let summary = chargingSummaryLine(for: sessions) {
+            lines.append(summary)
+        }
+
+        lines.append("Start         Awake    Elapsed  Gain    To full")
+
+        for session in sessions.suffix(limit).reversed() {
+            let estimate = chargingEstimateText(for: session)
+            let gainText = String(format: "+%.0f%%", session.gainedPercent)
+            let row = [
+                Formatters.shortDateTime.string(from: session.start).padding(toLength: 13, withPad: " ", startingAt: 0),
+                formatDuration(session.awakeDuration).padding(toLength: 8, withPad: " ", startingAt: 0),
+                formatDuration(session.elapsedDuration).padding(toLength: 8, withPad: " ", startingAt: 0),
+                gainText.padding(toLength: 7, withPad: " ", startingAt: 0),
+                estimate + (session.isOngoing ? "  live" : "")
+            ].joined(separator: "  ")
+            lines.append(row)
+        }
+
+        if let current = sessions.last, current.isOngoing, current.gainedPercent >= 1 {
+            let estimate = chargingEstimateText(for: current)
+            lines.append("")
+            lines.append("Current charge: \(formatDuration(current.awakeDuration)) awake across \(formatDuration(current.elapsedDuration)) elapsed, \(String(format: "+%.0f%%", current.gainedPercent)) so far, projecting roughly \(estimate) to full.")
+        }
+
+        return lines
+    }
+
+    private func chargingSummaryLine(for sessions: [ChargingSession]) -> String? {
+        let measurableSessions = sessions.filter { $0.gainedPercent >= 1 && $0.elapsedDuration > 0 }
+        guard !measurableSessions.isEmpty else {
+            return nil
+        }
+
+        let totalGain = measurableSessions.reduce(0) { $0 + $1.gainedPercent }
+        let totalElapsed = measurableSessions.reduce(0) { $0 + $1.elapsedDuration }
+        guard totalGain > 0, totalElapsed > 0 else {
+            return nil
+        }
+
+        let averageRate = totalGain / totalElapsed * 3600
+        let zeroToFullEstimate = totalElapsed / totalGain * 100
+        return style("Avg pace \(formatRate(averageRate))   0-100 estimate \(formatDuration(zeroToFullEstimate))   Sessions \(measurableSessions.count)", .muted)
+    }
+
+    private func chargingEstimateText(for session: ChargingSession) -> String {
+        if session.endLevel >= 99.5 && !session.isOngoing {
+            return "full"
+        }
+
+        return session.estimatedTimeToFull.map(formatDuration) ?? "n/a"
     }
 
     private func storePath() -> String {
@@ -272,6 +355,10 @@ struct ReportRenderer {
         }
 
         return errno == EPERM
+    }
+
+    private func formatRate(_ rate: Double) -> String {
+        String(format: "%.1f%%/hr", rate)
     }
 
     private func bucketedBatteryLevels(samples: [BatterySample], start: Date, end: Date, buckets: Int) -> [Double] {
@@ -389,6 +476,38 @@ enum SessionAnalyzer {
         return sessions
     }
 
+    static func chargingSessions(from samples: [BatterySample], awakeSpans: [AwakeSpan]) -> [ChargingSession] {
+        let orderedSamples = samples.sorted { $0.timestamp < $1.timestamp }
+        let mergedAwakeSpans = mergeAwakeSpans(awakeSpans)
+        var sessions: [ChargingSession] = []
+        var currentStartSample: BatterySample?
+        var lastChargingSample: BatterySample?
+
+        for sample in orderedSamples {
+            if sample.isCharging {
+                if currentStartSample == nil {
+                    currentStartSample = sample
+                }
+                lastChargingSample = sample
+                continue
+            }
+
+            if let startSample = currentStartSample, let lastChargingSample {
+                let endSample = chargingSessionEndSample(for: sample, lastChargingSample: lastChargingSample)
+                sessions.append(makeChargingSession(start: startSample, end: endSample, awakeSpans: mergedAwakeSpans, ongoing: false))
+            }
+
+            currentStartSample = nil
+            lastChargingSample = nil
+        }
+
+        if let startSample = currentStartSample, let lastChargingSample {
+            sessions.append(makeChargingSession(start: startSample, end: lastChargingSample, awakeSpans: mergedAwakeSpans, ongoing: true))
+        }
+
+        return sessions
+    }
+
     static func mergeAwakeSpans(_ spans: [AwakeSpan]) -> [AwakeSpan] {
         let orderedSpans = spans
             .filter { $0.end > $0.start }
@@ -435,6 +554,26 @@ enum SessionAnalyzer {
             awakeDuration: awake,
             isOngoing: ongoing
         )
+    }
+
+    private static func makeChargingSession(start: BatterySample, end: BatterySample, awakeSpans: [AwakeSpan], ongoing: Bool) -> ChargingSession {
+        let awake = overlapDuration(of: awakeSpans, within: start.timestamp..<end.timestamp)
+        return ChargingSession(
+            start: start.timestamp,
+            end: end.timestamp,
+            startLevel: start.preciseLevel,
+            endLevel: end.preciseLevel,
+            awakeDuration: awake,
+            isOngoing: ongoing
+        )
+    }
+
+    private static func chargingSessionEndSample(for nextSample: BatterySample, lastChargingSample: BatterySample) -> BatterySample {
+        if !nextSample.isOnBattery, !nextSample.isCharging, nextSample.preciseLevel >= lastChargingSample.preciseLevel {
+            return nextSample
+        }
+
+        return lastChargingSample
     }
 
     private static func overlapDuration(of span: AwakeSpan, within range: Range<Date>) -> TimeInterval {

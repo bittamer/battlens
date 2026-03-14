@@ -5,6 +5,7 @@
 - battery level over time
 - awake time over time, based on real sleep/wake notifications
 - unplugged sessions so you can estimate usable time per charge
+- charging sessions so you can see charge-up pace and time-to-full estimates
 
 ## Build
 
@@ -60,4 +61,4 @@ You can override that with `BATTLENS_DATA_DIR=/some/path`.
 
 - `track` records battery samples on startup, on wake, on sleep, when the power source changes, and on a repeating timer.
 - Awake time is tracked as "time not asleep", which is usually the best proxy for actual laptop-use time in terminal tools.
-- The report merges overlapping awake spans and uses unplugged sessions to project full-charge awake runtime from recent battery drain.
+- The report merges overlapping awake spans, tracks discharge sessions for full-charge awake runtime estimates, and tracks charging sessions for pace and time-to-full estimates.
