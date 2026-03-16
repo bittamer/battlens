@@ -214,6 +214,8 @@ struct ReportRenderer {
             timing = "to full \(toFull)"
         case .pluggedInIdle:
             timing = "not charging"
+        case .unknown:
+            timing = "state unavailable"
         }
 
         return "Now: \(level)  \(sample.powerSource)  \(sample.powerFlowState.statusText)  \(timing)"
@@ -474,8 +476,29 @@ enum SessionAnalyzer {
         var currentStartSample: BatterySample?
         var lastBatterySample: BatterySample?
 
+        func finishCurrentSession(ongoing: Bool) {
+            guard let startSample = currentStartSample, let endSample = lastBatterySample, endSample.timestamp > startSample.timestamp else {
+                currentStartSample = nil
+                lastBatterySample = nil
+                return
+            }
+
+            sessions.append(makeSession(start: startSample, end: endSample, awakeSpans: mergedAwakeSpans, ongoing: ongoing))
+            currentStartSample = nil
+            lastBatterySample = nil
+        }
+
         for sample in orderedSamples {
             if sample.isOnBattery {
+                if let previousSample = lastBatterySample {
+                    if intervalIsTrackedAwake(from: previousSample.timestamp, to: sample.timestamp, awakeSpans: mergedAwakeSpans) {
+                        lastBatterySample = sample
+                        continue
+                    }
+
+                    finishCurrentSession(ongoing: false)
+                }
+
                 if currentStartSample == nil {
                     currentStartSample = sample
                 }
@@ -483,16 +506,11 @@ enum SessionAnalyzer {
                 continue
             }
 
-            if let startSample = currentStartSample, let lastBatterySample {
-                sessions.append(makeSession(start: startSample, end: lastBatterySample, awakeSpans: mergedAwakeSpans, ongoing: false))
-            }
-
-            currentStartSample = nil
-            lastBatterySample = nil
+            finishCurrentSession(ongoing: false)
         }
 
-        if let startSample = currentStartSample, let lastBatterySample {
-            sessions.append(makeSession(start: startSample, end: lastBatterySample, awakeSpans: mergedAwakeSpans, ongoing: true))
+        if currentStartSample != nil, lastBatterySample != nil {
+            finishCurrentSession(ongoing: true)
         }
 
         return sessions
@@ -505,8 +523,29 @@ enum SessionAnalyzer {
         var currentStartSample: BatterySample?
         var lastChargingSample: BatterySample?
 
+        func finishCurrentSession(endSample: BatterySample, ongoing: Bool) {
+            guard let startSample = currentStartSample, endSample.timestamp > startSample.timestamp else {
+                currentStartSample = nil
+                lastChargingSample = nil
+                return
+            }
+
+            sessions.append(makeChargingSession(start: startSample, end: endSample, awakeSpans: mergedAwakeSpans, ongoing: ongoing))
+            currentStartSample = nil
+            lastChargingSample = nil
+        }
+
         for sample in orderedSamples {
             if sample.isCharging {
+                if let previousSample = lastChargingSample {
+                    if intervalIsTrackedAwake(from: previousSample.timestamp, to: sample.timestamp, awakeSpans: mergedAwakeSpans) {
+                        lastChargingSample = sample
+                        continue
+                    }
+
+                    finishCurrentSession(endSample: previousSample, ongoing: false)
+                }
+
                 if currentStartSample == nil {
                     currentStartSample = sample
                 }
@@ -514,17 +553,18 @@ enum SessionAnalyzer {
                 continue
             }
 
-            if let startSample = currentStartSample, let lastChargingSample {
-                let endSample = chargingSessionEndSample(for: sample, lastChargingSample: lastChargingSample)
-                sessions.append(makeChargingSession(start: startSample, end: endSample, awakeSpans: mergedAwakeSpans, ongoing: false))
+            if let lastChargingSample {
+                let endSample = chargingSessionEndSample(
+                    for: sample,
+                    lastChargingSample: lastChargingSample,
+                    awakeSpans: mergedAwakeSpans
+                )
+                finishCurrentSession(endSample: endSample, ongoing: false)
             }
-
-            currentStartSample = nil
-            lastChargingSample = nil
         }
 
-        if let startSample = currentStartSample, let lastChargingSample {
-            sessions.append(makeChargingSession(start: startSample, end: lastChargingSample, awakeSpans: mergedAwakeSpans, ongoing: true))
+        if let lastChargingSample {
+            finishCurrentSession(endSample: lastChargingSample, ongoing: true)
         }
 
         return sessions
@@ -571,8 +611,8 @@ enum SessionAnalyzer {
         return ChargeSession(
             start: start.timestamp,
             end: end.timestamp,
-            startLevel: start.preciseLevel,
-            endLevel: end.preciseLevel,
+            startLevel: start.level,
+            endLevel: end.level,
             awakeDuration: awake,
             isOngoing: ongoing
         )
@@ -583,19 +623,36 @@ enum SessionAnalyzer {
         return ChargingSession(
             start: start.timestamp,
             end: end.timestamp,
-            startLevel: start.preciseLevel,
-            endLevel: end.preciseLevel,
+            startLevel: start.level,
+            endLevel: end.level,
             awakeDuration: awake,
             isOngoing: ongoing
         )
     }
 
-    private static func chargingSessionEndSample(for nextSample: BatterySample, lastChargingSample: BatterySample) -> BatterySample {
-        if !nextSample.isOnBattery, !nextSample.isCharging, nextSample.preciseLevel >= lastChargingSample.preciseLevel {
+    private static func chargingSessionEndSample(
+        for nextSample: BatterySample,
+        lastChargingSample: BatterySample,
+        awakeSpans: [AwakeSpan]
+    ) -> BatterySample {
+        if !nextSample.isOnBattery,
+           !nextSample.isCharging,
+           nextSample.level >= lastChargingSample.level,
+           intervalIsTrackedAwake(from: lastChargingSample.timestamp, to: nextSample.timestamp, awakeSpans: awakeSpans) {
             return nextSample
         }
 
         return lastChargingSample
+    }
+
+    private static func intervalIsTrackedAwake(from start: Date, to end: Date, awakeSpans: [AwakeSpan]) -> Bool {
+        guard end > start else {
+            return false
+        }
+
+        return awakeSpans.contains { span in
+            span.start <= start && span.end >= end
+        }
     }
 
     private static func overlapDuration(of span: AwakeSpan, within range: Range<Date>) -> TimeInterval {

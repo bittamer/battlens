@@ -1,9 +1,10 @@
 import Foundation
+import IOKit.ps
 import Testing
 @testable import battlens
 
 @Test
-func closedSessionEndsAtLastBatterySampleAndUsesPreciseChargeDrop() throws {
+func closedSessionEndsAtLastBatterySampleAndUsesRecordedChargeLevels() throws {
     let start = Date(timeIntervalSince1970: 0)
     let lastBattery = Date(timeIntervalSince1970: 3_600)
     let pluggedIn = Date(timeIntervalSince1970: 5_400)
@@ -48,8 +49,29 @@ func closedSessionEndsAtLastBatterySampleAndUsesPreciseChargeDrop() throws {
     let session = try #require(sessions.first)
     #expect(session.end == lastBattery)
     #expect(abs(session.awakeDuration - 3_600) < 0.001)
-    #expect(abs(session.consumedPercent - 10.05) < 0.001)
-    #expect(abs((session.estimatedFullChargeAwakeRuntime ?? 0) - ((3_600 / 10.05) * 100)) < 0.001)
+    #expect(abs(session.consumedPercent - 10.0) < 0.001)
+    #expect(abs((session.estimatedFullChargeAwakeRuntime ?? 0) - ((3_600 / 10.0) * 100)) < 0.001)
+}
+
+@Test
+func batteryReaderRejectsMissingCapacityInsteadOfRecordingZeroPercent() {
+    let description: [String: Any] = [
+        kIOPSTypeKey as String: kIOPSInternalBatteryType as String,
+        kIOPSMaxCapacityKey as String: 100,
+        kIOPSIsChargingKey as String: false,
+        kIOPSPowerSourceStateKey as String: kIOPSBatteryPowerValue as String
+    ]
+
+    var didThrow = false
+
+    do {
+        _ = try BatteryReader.sample(from: description, now: Date(timeIntervalSince1970: 0))
+    } catch {
+        didThrow = true
+        #expect(error.localizedDescription.contains("Current Capacity"))
+    }
+
+    #expect(didThrow)
 }
 
 @Test
@@ -99,6 +121,86 @@ func sessionsMergeOverlappingAwakeSpansBeforeSumming() throws {
 }
 
 @Test
+func dischargeSessionsSplitAcrossSleepBoundaries() throws {
+    let start = Date(timeIntervalSince1970: 0)
+    let beforeSleep = Date(timeIntervalSince1970: 3_600)
+    let afterWake = Date(timeIntervalSince1970: 10_800)
+    let beforeCharge = Date(timeIntervalSince1970: 14_400)
+    let pluggedIn = Date(timeIntervalSince1970: 15_000)
+
+    let samples = [
+        BatterySample(
+            timestamp: start,
+            level: 100.0,
+            currentCapacity: 100,
+            maxCapacity: 100,
+            isCharging: false,
+            powerSource: "Battery Power",
+            timeRemainingMinutes: 300
+        ),
+        BatterySample(
+            timestamp: beforeSleep,
+            level: 90.0,
+            currentCapacity: 90,
+            maxCapacity: 100,
+            isCharging: false,
+            powerSource: "Battery Power",
+            timeRemainingMinutes: 240
+        ),
+        BatterySample(
+            timestamp: afterWake,
+            level: 80.0,
+            currentCapacity: 80,
+            maxCapacity: 100,
+            isCharging: false,
+            powerSource: "Battery Power",
+            timeRemainingMinutes: 180
+        ),
+        BatterySample(
+            timestamp: beforeCharge,
+            level: 70.0,
+            currentCapacity: 70,
+            maxCapacity: 100,
+            isCharging: false,
+            powerSource: "Battery Power",
+            timeRemainingMinutes: 150
+        ),
+        BatterySample(
+            timestamp: pluggedIn,
+            level: 71.0,
+            currentCapacity: 71,
+            maxCapacity: 100,
+            isCharging: true,
+            powerSource: "AC Power",
+            timeRemainingMinutes: 90
+        )
+    ]
+
+    let sessions = SessionAnalyzer.sessions(
+        from: samples,
+        awakeSpans: [
+            AwakeSpan(start: start, end: beforeSleep),
+            AwakeSpan(start: afterWake, end: beforeCharge)
+        ]
+    )
+
+    #expect(sessions.count == 2)
+
+    let first = try #require(sessions.first)
+    let second = try #require(sessions.last)
+
+    #expect(first.start == start)
+    #expect(first.end == beforeSleep)
+    #expect(abs(first.consumedPercent - 10.0) < 0.001)
+    #expect(abs(first.awakeDuration - 3_600) < 0.001)
+
+    #expect(second.start == afterWake)
+    #expect(second.end == beforeCharge)
+    #expect(abs(second.consumedPercent - 10.0) < 0.001)
+    #expect(abs(second.awakeDuration - 3_600) < 0.001)
+}
+
+@Test
 func activeAwakeSpanFallsBackToLastSampleWhenTrackerIsNotRunning() throws {
     let state = TrackerState(
         activeAwakeStart: Date(timeIntervalSince1970: 0),
@@ -120,6 +222,48 @@ func activeAwakeSpanFallsBackToLastSampleWhenTrackerIsNotRunning() throws {
 }
 
 @Test
+func sparseSnapshotOnlyDischargeHistoryDoesNotProduceSyntheticSessions() {
+    let start = Date(timeIntervalSince1970: 0)
+    let later = Date(timeIntervalSince1970: 7_200)
+    let pluggedIn = Date(timeIntervalSince1970: 10_800)
+
+    let sessions = SessionAnalyzer.sessions(
+        from: [
+            BatterySample(
+                timestamp: start,
+                level: 100.0,
+                currentCapacity: 100,
+                maxCapacity: 100,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 300
+            ),
+            BatterySample(
+                timestamp: later,
+                level: 70.0,
+                currentCapacity: 70,
+                maxCapacity: 100,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 120
+            ),
+            BatterySample(
+                timestamp: pluggedIn,
+                level: 72.0,
+                currentCapacity: 72,
+                maxCapacity: 100,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 60
+            )
+        ],
+        awakeSpans: []
+    )
+
+    #expect(sessions.isEmpty)
+}
+
+@Test
 func displayedTimeRemainingIsHiddenForIdleACSamples() {
     let sample = BatterySample(
         timestamp: Date(timeIntervalSince1970: 0),
@@ -132,6 +276,36 @@ func displayedTimeRemainingIsHiddenForIdleACSamples() {
     )
 
     #expect(sample.displayedTimeRemainingMinutes == nil)
+}
+
+@Test
+func unknownAndOfflinePowerSourcesAreNotTreatedAsBattery() {
+    let unknown = BatterySample(
+        timestamp: Date(timeIntervalSince1970: 0),
+        level: 50.0,
+        currentCapacity: 50,
+        maxCapacity: 100,
+        isCharging: false,
+        powerSource: "Unknown",
+        timeRemainingMinutes: 240
+    )
+    let offline = BatterySample(
+        timestamp: Date(timeIntervalSince1970: 0),
+        level: 50.0,
+        currentCapacity: 50,
+        maxCapacity: 100,
+        isCharging: false,
+        powerSource: "Off Line",
+        timeRemainingMinutes: 240
+    )
+
+    #expect(!unknown.isOnBattery)
+    #expect(unknown.powerFlowState == .unknown)
+    #expect(unknown.displayedTimeRemainingMinutes == nil)
+
+    #expect(!offline.isOnBattery)
+    #expect(offline.powerFlowState == .unknown)
+    #expect(offline.displayedTimeRemainingMinutes == nil)
 }
 
 @Test
@@ -225,6 +399,48 @@ func chargingSessionFallsBackToLastChargingSampleWhenUnplugged() throws {
     let session = try #require(sessions.first)
     #expect(session.end == lastCharging)
     #expect(abs(session.gainedPercent - 15) < 0.001)
+}
+
+@Test
+func sparseSnapshotOnlyChargingHistoryDoesNotProduceSyntheticSessions() {
+    let start = Date(timeIntervalSince1970: 0)
+    let later = Date(timeIntervalSince1970: 7_200)
+    let complete = Date(timeIntervalSince1970: 7_800)
+
+    let sessions = SessionAnalyzer.chargingSessions(
+        from: [
+            BatterySample(
+                timestamp: start,
+                level: 20.0,
+                currentCapacity: 20,
+                maxCapacity: 100,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 180
+            ),
+            BatterySample(
+                timestamp: later,
+                level: 80.0,
+                currentCapacity: 80,
+                maxCapacity: 100,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 45
+            ),
+            BatterySample(
+                timestamp: complete,
+                level: 81.0,
+                currentCapacity: 81,
+                maxCapacity: 100,
+                isCharging: false,
+                powerSource: "AC Power",
+                timeRemainingMinutes: nil
+            )
+        ],
+        awakeSpans: []
+    )
+
+    #expect(sessions.isEmpty)
 }
 
 @Test

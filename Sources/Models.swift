@@ -14,24 +14,28 @@ struct BatterySample: Codable {
         powerSource.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    var preciseLevel: Double {
-        guard maxCapacity > 0 else {
-            return level
+    var powerSourceState: PowerSourceState {
+        let normalizedACPower = (kIOPSACPowerValue as String).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedBatteryPower = (kIOPSBatteryPowerValue as String).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedOfflinePower = "off line"
+
+        if normalizedPowerSource == normalizedBatteryPower || normalizedPowerSource.contains("battery") {
+            return .battery
         }
 
-        return (Double(currentCapacity) / Double(maxCapacity)) * 100
+        if normalizedPowerSource == normalizedACPower || normalizedPowerSource.contains("ac") {
+            return .ac
+        }
+
+        if normalizedPowerSource == normalizedOfflinePower || normalizedPowerSource.contains("offline") || normalizedPowerSource.contains("off line") {
+            return .offline
+        }
+
+        return .unknown
     }
 
     var isOnBattery: Bool {
-        if powerSource == kIOPSBatteryPowerValue {
-            return true
-        }
-
-        if powerSource == kIOPSACPowerValue {
-            return false
-        }
-
-        return normalizedPowerSource.contains("battery") || (!isCharging && !normalizedPowerSource.contains("ac"))
+        powerSourceState == .battery
     }
 
     var displayedTimeRemainingMinutes: Int? {
@@ -47,14 +51,29 @@ struct BatterySample: Codable {
             return .charging
         }
 
-        return isOnBattery ? .discharging : .pluggedInIdle
+        switch powerSourceState {
+        case .battery:
+            return .discharging
+        case .ac:
+            return .pluggedInIdle
+        case .offline, .unknown:
+            return .unknown
+        }
     }
 }
 
-enum PowerFlowState {
+enum PowerSourceState: Equatable {
+    case battery
+    case ac
+    case offline
+    case unknown
+}
+
+enum PowerFlowState: Equatable {
     case discharging
     case charging
     case pluggedInIdle
+    case unknown
 
     var statusText: String {
         switch self {
@@ -64,6 +83,8 @@ enum PowerFlowState {
             return "charging"
         case .pluggedInIdle:
             return "plugged in"
+        case .unknown:
+            return "unknown"
         }
     }
 }
