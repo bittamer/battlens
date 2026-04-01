@@ -85,6 +85,14 @@ do {
             throw BattLensError.message("Option --duration must be greater than 0.")
         }
 
+        if let existingState = try store.loadState(),
+           existingState.isFresh(at: Date()),
+           processIsRunning(existingState.trackerPID) {
+            throw BattLensError.message(
+                "BattLens is already tracking with PID \(existingState.trackerPID). Stop the existing tracker before starting another one."
+            )
+        }
+
         let verbose = parsed.hasFlag("verbose")
         let service = TrackerService(store: store, interval: TimeInterval(interval), duration: duration, verbose: verbose)
         try service.run()

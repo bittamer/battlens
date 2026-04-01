@@ -73,7 +73,7 @@ struct ReportRenderer {
     private func mergedAwakeSpans() -> [AwakeSpan] {
         var spans = awakeSpans
 
-        if let state, let activeSpan = state.activeAwakeSpan(now: now, trackerIsRunning: trackerIsRunning(state.trackerPID)) {
+        if let state, let activeSpan = state.activeAwakeSpan(now: now, trackerIsRunning: processIsRunning(state.trackerPID)) {
             spans.append(activeSpan)
         }
 
@@ -367,18 +367,6 @@ struct ReportRenderer {
 
         var windowSize = winsize()
         return ioctl(STDOUT_FILENO, TIOCGWINSZ, &windowSize) == 0 ? max(40, Int(windowSize.ws_col)) : 80
-    }
-
-    private func trackerIsRunning(_ pid: Int32) -> Bool {
-        guard pid > 0 else {
-            return false
-        }
-
-        if kill(pid, 0) == 0 {
-            return true
-        }
-
-        return errno == EPERM
     }
 
     private func formatRate(_ rate: Double) -> String {
