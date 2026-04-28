@@ -253,7 +253,7 @@ private struct DashboardRenderer {
 
         lines.append(footer(width: width))
 
-        return "\u{001B}[H\u{001B}[2J" + lines.prefix(height).map { fitANSI($0, to: width) }.joined(separator: "\n")
+        return "\u{001B}[H\u{001B}[2J" + lines.prefix(height).map { fitANSI($0, to: width) }.joined(separator: "\r\n")
     }
 
     private func body(width: Int) -> [String] {
@@ -712,6 +712,7 @@ private final class RawTerminal {
         originalFlags = fcntl(STDIN_FILENO, F_GETFL)
         var raw = originalTermios
         cfmakeraw(&raw)
+        raw.c_oflag = originalTermios.c_oflag
 
         guard tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
