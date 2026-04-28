@@ -27,6 +27,13 @@ Render a report:
 .build/release/battlens report --days 7 --sessions 8
 ```
 
+Open the interactive terminal dashboard:
+
+```bash
+.build/release/battlens tui
+.build/release/battlens dashboard --refresh 5 --days 7
+```
+
 Log a one-off sample:
 
 ```bash
@@ -60,5 +67,6 @@ You can override that with `BATTLENS_DATA_DIR=/some/path`.
 ## Notes
 
 - `track` records battery samples on startup, on wake, on sleep, when the power source changes, and on a repeating timer.
+- `tui` and `dashboard` open a live terminal dashboard. Use `q` to quit, arrow keys to switch views or select sessions, `t` to cycle ranges, `s` to log a snapshot, and `i`/`u` to install or remove the launch agent.
 - Awake time is tracked as "time not asleep", which is usually the best proxy for actual laptop-use time in terminal tools.
 - The report merges overlapping awake spans, tracks discharge sessions for per-session and cross-session full-charge awake runtime estimates, and tracks charging sessions for pace and time-to-full estimates.

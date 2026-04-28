@@ -562,3 +562,51 @@ func reportShowsAggregateDischargeEstimateAcrossSessions() {
     #expect(report.contains("Full-charge estimate 6h 40m"))
     #expect(report.contains("Sessions 2"))
 }
+
+@Test
+func reportDataProvidesSharedDashboardCalculations() throws {
+    let start = Date(timeIntervalSince1970: 0)
+    let end = Date(timeIntervalSince1970: 3_600)
+    let pluggedIn = Date(timeIntervalSince1970: 3_900)
+
+    let data = BattLensReportData(
+        samples: [
+            BatterySample(
+                timestamp: start,
+                level: 100.0,
+                currentCapacity: 6_000,
+                maxCapacity: 6_000,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 300
+            ),
+            BatterySample(
+                timestamp: end,
+                level: 90.0,
+                currentCapacity: 5_400,
+                maxCapacity: 6_000,
+                isCharging: false,
+                powerSource: "Battery Power",
+                timeRemainingMinutes: 240
+            ),
+            BatterySample(
+                timestamp: pluggedIn,
+                level: 91.0,
+                currentCapacity: 5_460,
+                maxCapacity: 6_000,
+                isCharging: true,
+                powerSource: "AC Power",
+                timeRemainingMinutes: 90
+            )
+        ],
+        awakeSpans: [AwakeSpan(start: start, end: end)],
+        state: nil,
+        now: pluggedIn
+    )
+
+    #expect(data.latestSample?.timestamp == pluggedIn)
+    #expect(data.dischargeSessions.count == 1)
+    #expect(abs((data.averageDischargeRatePercentPerHour() ?? 0) - 10.0) < 0.001)
+    #expect(abs((data.fullChargeAwakeEstimate() ?? 0) - 36_000) < 0.001)
+    #expect(abs((data.awakeDurations(days: 1).first?.1 ?? 0) - 3_600) < 0.001)
+}

@@ -29,12 +29,7 @@ struct ReportRenderer {
     let now: Date
 
     func render(days: Int, sessionLimit: Int) -> String {
-        let recentSamples = samples.sorted { $0.timestamp < $1.timestamp }
-        let spans = mergedAwakeSpans()
-        let dischargeSessions = SessionAnalyzer.sessions(from: recentSamples, awakeSpans: spans)
-            .filter { $0.consumedPercent >= 3 || $0.awakeDuration >= 900 }
-        let chargingSessions = SessionAnalyzer.chargingSessions(from: recentSamples, awakeSpans: spans)
-            .filter { $0.gainedPercent >= 3 || $0.elapsedDuration >= 900 || $0.isOngoing }
+        let reportData = BattLensReportData(samples: samples, awakeSpans: awakeSpans, state: state, now: now)
 
         var lines: [String] = []
 
@@ -42,7 +37,7 @@ struct ReportRenderer {
         lines.append(style("Battery history, awake time, and charge-state tracking for macOS", .muted))
         lines.append("")
 
-        if let latest = recentSamples.last {
+        if let latest = reportData.latestSample {
             lines.append(currentStatusLine(for: latest))
             lines.append("Latest sample: \(Formatters.timestamp.string(from: latest.timestamp))")
         } else {
@@ -57,27 +52,17 @@ struct ReportRenderer {
         lines.append("")
 
         lines.append(sectionTitle("Awake Time"))
-        lines.append(contentsOf: renderAwakeBars(days: days))
+        lines.append(contentsOf: renderAwakeBars(reportData: reportData, days: days))
         lines.append("")
 
         lines.append(sectionTitle("Discharge Sessions"))
-        lines.append(contentsOf: renderDischargeSessions(sessions: dischargeSessions, limit: sessionLimit))
+        lines.append(contentsOf: renderDischargeSessions(sessions: reportData.dischargeSessions, limit: sessionLimit))
         lines.append("")
 
         lines.append(sectionTitle("Charging Sessions"))
-        lines.append(contentsOf: renderChargingSessions(sessions: chargingSessions, limit: sessionLimit))
+        lines.append(contentsOf: renderChargingSessions(sessions: reportData.chargingSessions, limit: sessionLimit))
 
         return lines.joined(separator: "\n")
-    }
-
-    private func mergedAwakeSpans() -> [AwakeSpan] {
-        var spans = awakeSpans
-
-        if let state, let activeSpan = state.activeAwakeSpan(now: now, trackerIsRunning: processIsRunning(state.trackerPID)) {
-            spans.append(activeSpan)
-        }
-
-        return SessionAnalyzer.mergeAwakeSpans(spans)
     }
 
     private func renderBatteryGraph(days: Int) -> [String] {
@@ -175,20 +160,12 @@ struct ReportRenderer {
         return lines
     }
 
-    private func renderAwakeBars(days: Int) -> [String] {
-        let spans = mergedAwakeSpans()
-        guard !spans.isEmpty else {
+    private func renderAwakeBars(reportData: BattLensReportData, days: Int) -> [String] {
+        guard !reportData.mergedAwakeSpans.isEmpty else {
             return [style("No awake-time spans yet. Start the tracker to capture sleep/wake boundaries.", .muted)]
         }
 
-        let calendar = Calendar.current
-        let todayStart = calendar.startOfDay(for: now)
-        let starts = (0..<days).compactMap { calendar.date(byAdding: .day, value: -((days - 1) - $0), to: todayStart) }
-        let values = starts.map { startOfDay -> (Date, TimeInterval) in
-            let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay.addingTimeInterval(86_400)
-            return (startOfDay, SessionAnalyzer.overlapDuration(of: spans, within: startOfDay..<endOfDay))
-        }
-
+        let values = reportData.awakeDurations(days: days)
         let maxDuration = max(values.map(\.1).max() ?? 0, 1)
         let barWidth = 26
 

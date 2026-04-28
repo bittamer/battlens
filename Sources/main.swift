@@ -118,6 +118,32 @@ do {
         )
         print(renderer.render(days: days, sessionLimit: sessionLimit))
 
+    case "tui", "dashboard":
+        let refresh = try parsed.int("refresh", default: 5)
+        let days = try parsed.int("days", default: 7)
+        let sessionLimit = try parsed.int("sessions", default: 8)
+        guard refresh > 0 else {
+            throw BattLensError.message("Option --refresh must be greater than 0.")
+        }
+
+        guard days >= 0 else {
+            throw BattLensError.message("Option --days must be 0 or greater.")
+        }
+
+        guard sessionLimit > 0 else {
+            throw BattLensError.message("Option --sessions must be greater than 0.")
+        }
+
+        let dashboard = TerminalDashboard(
+            store: store,
+            options: DashboardOptions(
+                refreshInterval: TimeInterval(refresh),
+                days: days,
+                sessionLimit: sessionLimit
+            )
+        )
+        try dashboard.run()
+
     case "install-agent":
         let interval = try parsed.int("interval", default: 300)
         guard interval > 0 else {
@@ -153,6 +179,8 @@ func printHelp(to stream: UnsafeMutablePointer<FILE> = stdout) {
       snapshot                  Record a single battery sample now
       track                     Run the tracker in the foreground
       report                    Render charts plus charge and discharge estimates
+      tui                       Open the interactive terminal dashboard
+      dashboard                 Alias for tui
       install-agent             Install a per-user launchd agent
       uninstall-agent           Remove the launchd agent
 
@@ -160,6 +188,8 @@ func printHelp(to stream: UnsafeMutablePointer<FILE> = stdout) {
       battlens track --interval 300 --verbose
       battlens track --interval 60 --duration 180
       battlens report --days 7 --sessions 8
+      battlens tui --refresh 5 --days 7 --sessions 8
+      battlens dashboard --refresh 5 --days 7
       battlens install-agent --interval 300 --executable /path/to/battlens
 
     Environment:
